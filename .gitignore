@@ -29,3 +29,6 @@ _meta.json
 
 # Packaged skills
 *.skill
+.agent/
+facebook-group-monitor/scripts/.venv/*
+facebook-group-monitor/scripts/cookies.json

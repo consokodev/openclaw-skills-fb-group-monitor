@@ -101,11 +101,30 @@ scripts/fb-group-monitor.sh clean-shots
 ```
 Auto-removes screenshots older than 48h and caps at 100 max. Script also auto-cleans before each scrape.
 
-### 4. Login (one-time, from terminal)
+### 4. Login — Interactive (requires display)
 ```bash
 scripts/fb-group-monitor.sh login
 ```
 Opens browser, login manually, press Enter to save session. Session lasts weeks/months.
+
+> ⚠️ **Not available in Docker / headless environments.** Use `login-cookies` instead.
+
+### 5. Login — Cookie import (Docker / headless)
+```bash
+scripts/fb-group-monitor.sh login-cookies <path-to-cookies.json>
+```
+
+**Steps:**
+1. Login to Facebook on your **local browser**
+2. Install "Cookie-Editor" extension ([Chrome](https://chromewebstore.google.com/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm) / [Firefox](https://addons.mozilla.org/en-US/firefox/addon/cookie-editor/))
+3. Go to facebook.com → open Cookie-Editor → **Export** (JSON format) → save as `cookies.json`
+4. Copy the file to your Docker container / server
+5. Run `login-cookies cookies.json`
+
+**Output:**
+```json
+{"success": true, "action": "login-cookies", "cookies_imported": 15, "message": "Imported 15 cookies. Session active — logged into Facebook."}
+```
 
 ## Agent Workflow
 
@@ -148,7 +167,8 @@ Format per new post:
 ## Important Notes
 
 - **Rate limiting**: Recommended cron interval ≥ 2 hours — safe for Facebook
-- **Session expired**: If error "Chưa đăng nhập" → run `login` from terminal
+- **Session expired**: If error "Not logged in" → run `login` (desktop) or re-import cookies via `login-cookies` (Docker)
+- **Docker / headless**: Use `login-cookies` — interactive `login` requires a display
 - **UI changes**: Facebook updates DOM frequently → selectors may need updates
 - **"See more"**: Text is truncated — screenshots usually have more complete content
 - **Screenshot quality**: JPEG 82% — sufficient for LLM vision to read text and recognize images

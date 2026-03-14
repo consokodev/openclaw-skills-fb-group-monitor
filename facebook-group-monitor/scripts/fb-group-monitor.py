@@ -5,7 +5,8 @@ Uses Playwright with stealth mode and persistent login session.
 Supports screenshot capture per post for LLM vision analysis.
 
 Usage:
-    fb-group-monitor.py login                                      # Login (opens browser)
+    fb-group-monitor.py login                                      # Login (opens browser — requires display)
+    fb-group-monitor.py login-cookies <cookie_file>                # Import cookies (Docker / headless)
     fb-group-monitor.py scrape <group_url> [--limit N]             # Scrape new posts (with screenshots)
     fb-group-monitor.py scrape <group_url> [--limit N] --no-shots  # Scrape without screenshots
     fb-group-monitor.py status                                     # Check login status
@@ -265,6 +266,99 @@ async def cmd_login(args):
     result_json(True, "login", message="Facebook session saved.")
 
 
+async def cmd_login_cookies(args):
+    """Import Facebook cookies from a JSON file (Cookie-Editor export format).
+    Works in Docker/headless environments where interactive login is impossible.
+    """
+    cookie_file = Path(args.cookie_file).expanduser()
+    if not cookie_file.exists():
+        result_json(False, "login-cookies",
+                    error=f"Cookie file not found: {cookie_file}")
+
+    try:
+        raw_cookies = json.loads(cookie_file.read_text())
+    except json.JSONDecodeError as e:
+        result_json(False, "login-cookies",
+                    error=f"Invalid JSON in cookie file: {e}")
+
+    if not isinstance(raw_cookies, list):
+        result_json(False, "login-cookies",
+                    error="Cookie file must contain a JSON array of cookie objects.")
+
+    # Normalize cookies to Playwright format
+    pw_cookies = []
+    for c in raw_cookies:
+        if not isinstance(c, dict):
+            continue
+        name = c.get("name", "")
+        value = c.get("value", "")
+        domain = c.get("domain", "")
+        if not name or not value or not domain:
+            continue
+
+        cookie = {
+            "name": name,
+            "value": value,
+            "domain": domain,
+            "path": c.get("path", "/"),
+        }
+
+        # Handle expiry/expirationDate (Cookie-Editor uses expirationDate)
+        expiry = c.get("expirationDate") or c.get("expiry")
+        if expiry and isinstance(expiry, (int, float)) and expiry > 0:
+            cookie["expires"] = float(expiry)
+
+        if c.get("secure"):
+            cookie["secure"] = True
+        if c.get("httpOnly"):
+            cookie["httpOnly"] = True
+        if c.get("sameSite"):
+            ss = str(c["sameSite"]).capitalize()
+            if ss in ("Strict", "Lax", "None"):
+                cookie["sameSite"] = ss
+
+        pw_cookies.append(cookie)
+
+    if not pw_cookies:
+        result_json(False, "login-cookies",
+                    error="No valid cookies found in file. Expected Cookie-Editor JSON format.")
+
+    # Import cookies into persistent browser context
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as p:
+        context, stealth_fn = await create_browser_context(p, headless=True)
+        page = context.pages[0] if context.pages else await context.new_page()
+        if stealth_fn:
+            await stealth_fn(page)
+
+        await context.add_cookies(pw_cookies)
+
+        # Verify login by navigating to Facebook
+        await page.goto("https://www.facebook.com/", wait_until="domcontentloaded")
+        await page.wait_for_timeout(3000)
+
+        logged_in = False
+        if "login" not in page.url and "checkpoint" not in page.url:
+            profile_link = await page.query_selector(
+                '[aria-label="Your profile"], [aria-label="Trang cá nhân của bạn"]'
+            )
+            nav_menu = await page.query_selector('[role="navigation"]')
+            logged_in = profile_link is not None or nav_menu is not None
+
+        await context.close()
+
+    if logged_in:
+        result_json(True, "login-cookies",
+                    cookies_imported=len(pw_cookies),
+                    message=f"Imported {len(pw_cookies)} cookies. Session active — logged into Facebook.")
+    else:
+        result_json(False, "login-cookies",
+                    cookies_imported=len(pw_cookies),
+                    error=f"Imported {len(pw_cookies)} cookies but login verification failed. "
+                          "Cookies may be expired or incomplete. Try re-exporting from browser.")
+
+
 async def cmd_status(args):
     from playwright.async_api import async_playwright
 
@@ -453,7 +547,13 @@ def main():
     sub = parser.add_subparsers(dest="cmd")
     sub.required = True
 
-    sub.add_parser("login", help="Login to Facebook (opens browser)")
+    sub.add_parser("login", help="Login to Facebook (opens browser — requires display)")
+
+    cookies_p = sub.add_parser("login-cookies",
+                               help="Import cookies from JSON file (Docker / headless)")
+    cookies_p.add_argument("cookie_file",
+                           help="Path to JSON cookie file (Cookie-Editor export format)")
+
     sub.add_parser("status", help="Check login session")
 
     clean_p = sub.add_parser("clean-shots", help="Remove old screenshots")
@@ -478,6 +578,7 @@ def main():
 
     cmd_map = {
         "login": cmd_login,
+        "login-cookies": cmd_login_cookies,
         "status": cmd_status,
         "scrape": cmd_scrape,
         "clean-shots": cmd_clean_shots,
