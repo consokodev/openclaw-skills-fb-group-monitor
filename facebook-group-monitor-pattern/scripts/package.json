@@ -1,0 +1,30 @@
+{
+    "name": "fb-monitor-pattern",
+    "version": "1.0.0",
+    "description": "Config-driven Facebook group monitor — match posts against patterns and save to MongoDB",
+    "type": "module",
+    "scripts": {
+        "start": "tsx src/index.ts",
+        "test": "vitest run",
+        "test:watch": "vitest"
+    },
+    "dependencies": {
+        "dotenv": "^16.4.7",
+        "js-yaml": "^4.1.0",
+        "mongoose": "^8.9.5",
+        "playwright": "^1.49.1",
+        "playwright-extra": "^4.3.6",
+        "puppeteer-extra-plugin-stealth": "^2.11.2"
+    },
+    "devDependencies": {
+        "@types/js-yaml": "^4.0.9",
+        "@types/node": "^22.10.5",
+        "mongodb-memory-server": "^10.4.0",
+        "tsx": "^4.19.2",
+        "typescript": "^5.7.3",
+        "vitest": "^3.0.4"
+    },
+    "engines": {
+        "node": ">=20.0.0"
+    }
+}

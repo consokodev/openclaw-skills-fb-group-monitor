@@ -1,0 +1,17 @@
+services:
+  mongodb:
+    image: mongo:7
+    container_name: openclaw-mongodb
+    restart: unless-stopped
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-waegh3ahm7Eingoh}
+      MONGO_INITDB_DATABASE: ${MONGO_DB_NAME:-openclaw}
+    volumes:
+      - mongodb_data:/data/db
+
+volumes:
+  mongodb_data:
+    driver: local

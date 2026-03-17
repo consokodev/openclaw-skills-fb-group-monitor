@@ -1,0 +1,34 @@
+# Facebook Group Monitor Pattern — Configuration
+# Each monitor defines: groups to scrape, patterns to match, and where to save.
+
+monitors:
+  - name: "VN30 Stock Tracker"
+    groups:
+      - url: "https://www.facebook.com/groups/442183905968331"
+        schedule: "0 8 * * *"       # 8 AM daily
+      # - url: "https://www.facebook.com/groups/987654321"
+      #   schedule: "0 8,14 * * *"    # 8 AM and 2 PM
+    patterns:
+      - "SSI"
+      - "DGC"
+    match_mode: "word"              # exact word boundary: \bPATTERN\b
+    collection: "fb_stock_mentions"
+
+  # - name: "Job Hunter"
+  #   groups:
+  #     - url: "https://www.facebook.com/groups/111222333"
+  #       schedule: "0 9 * * *"       # 9 AM daily
+  #   patterns:
+  #     - "DevOPS remote"
+  #     - "frontend developer"
+  #     - "backend developer"
+  #   match_mode: "contains"          # word-split: all words present (order-independent)
+  #   collection: "fb_job_posts"
+
+settings:
+  browser_data_dir: ".browser-data"
+  cooldown_between_groups_ms: [120000, 300000]  # 2-5 min random
+  delay_between_actions_ms: [3000, 8000]        # 3-8 sec random
+  max_scroll_rounds: 8
+  post_limit_per_group: 30
+  yesterday_only: false

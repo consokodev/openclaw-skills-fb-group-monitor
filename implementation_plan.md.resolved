@@ -1,0 +1,345 @@
+# Facebook Group Monitor Pattern — Implementation Plan
+
+## Goal
+
+Build a **config-driven Facebook group monitoring skill** (`facebook-group-monitor-pattern`) that:
+1. Scrapes yesterday's posts from configured Facebook groups
+2. Matches posts against user-defined patterns (stocks, jobs, anything)
+3. Saves matched posts to MongoDB
+4. Runs via OpenClaw cron with rate-limit-safe crawling
+5. Deduplicates posts across reruns, auto-cleans daily
+
+**Stack:** Node.js + TypeScript + Playwright + Mongoose
+
+> [!IMPORTANT]
+> This creates a **new** skill folder `facebook-group-monitor-pattern/` at the same level as `facebook-group-monitor/`. The existing Python skill is **untouched**.
+
+---
+
+## Confirmed Decisions
+
+| Decision | Choice |
+|----------|--------|
+| Pattern matching | ✅ Word-split contains (all words present, order-independent) |
+| Browser session | ✅ **Separate** — own `.browser-data/` (requires separate login) |
+| Engagement metrics | ✅ Extract from visible text ("12 comments" → `12`). `null` if not found |
+| MongoDB | ✅ Self-hosted, connection string in `.env`, Mongoose ORM |
+| Scheduler | ✅ OpenClaw cron |
+| Post date detection | ✅ Option A — parse relative time text |
+| Dedup auto-clean | ✅ Explained below |
+
+---
+
+## Dedup Daily Auto-Clean — How It Works
+
+**The Problem:**
+Your cron may trigger multiple times per day (e.g., 8 AM and 2 PM). Each run scrapes "yesterday's posts" from the group feed. Without dedup, the 2 PM run would re-save the same posts the 8 AM run already saved.
+
+**The Solution — `_checked_posts` collection in MongoDB:**
+
+```
+DAY 1: March 16
+
+  8:00 AM — First run
+  ├── Scrape group → find 5 "yesterday" posts
+  ├── For each post:
+  │   ├── Check _checked_posts: post_url exists? → NO (first run)
+  │   ├── Save matched post to fb_stock_mentions ✅
+  │   └── Insert post_url into _checked_posts (date: 2026-03-16)
+  └── Result: 5 posts saved
+
+  2:00 PM — Rerun (same day)
+  ├── Scrape group → same 5 posts still visible
+  ├── For each post:
+  │   ├── Check _checked_posts: post_url exists? → YES (from 8 AM)
+  │   └── SKIP — no duplicate ✅
+  └── Result: 0 new posts (no duplicates!)
+
+DAY 2: March 17
+
+  8:00 AM — New day starts
+  ├── Auto-clean: DELETE all _checked_posts where checked_date < today (March 17)
+  │   └── All March 16 entries removed 🧹
+  ├── Scrape group → now looking for March 16 posts ("yesterday")
+  ├── These are DIFFERENT posts than yesterday's "yesterday" (March 15)
+  └── Fresh start — new day, new posts, clean dedup table
+```
+
+**Why clean daily?**
+- `_checked_posts` only needs to track posts **within the current processing day**
+- When a new day starts, "yesterday" shifts — we look for different posts
+- Old entries are irrelevant and would waste storage
+- Clean slate each day = simple, predictable behavior
+
+**Implementation:**
+- On each run start: `if last_clean_date < today → delete entries where checked_date < today`
+- After matching: `insert { post_url, checked_date: today }`
+- Unique index on `post_url` for fast lookups
+
+---
+
+## Proposed Changes
+
+### Project Structure
+
+```
+facebook-group-monitor-pattern/
+├── SKILL.md                          # Skill documentation for OpenClaw
+├── references/
+│   └── SETUP.md                      # Installation + config guide
+├── scripts/
+│   ├── package.json                  # Node.js dependencies
+│   ├── tsconfig.json                 # TypeScript config
+│   ├── .env.example                  # MongoDB connection template
+│   ├── config.yaml                   # Monitor definitions
+│   ├── fb-monitor-pattern.sh         # Shell wrapper (activates Node, runs CLI)
+│   └── src/
+│       ├── index.ts                  # CLI entry point
+│       ├── config/
+│       │   ├── loader.ts             # YAML config parser + validator
+│       │   └── types.ts              # TypeScript interfaces for config
+│       ├── crawler/
+│       │   ├── browser.ts            # Playwright browser context (stealth)
+│       │   ├── scraper.ts            # Group feed scraper + post extraction
+│       │   ├── rate-limiter.ts       # Delays, cooldowns, anti-detection
+│       │   └── date-parser.ts        # Parse relative timestamps
+│       ├── matcher/
+│       │   └── pattern-matcher.ts    # Pattern matching engine
+│       ├── storage/
+│       │   ├── connection.ts         # MongoDB connection via Mongoose
+│       │   ├── models.ts             # Mongoose schemas
+│       │   └── dedup.ts              # Checked post tracker + daily cleanup
+│       └── utils/
+│           └── logger.ts             # JSON logger for stdout
+```
+
+---
+
+### Config System
+
+#### [NEW] [config.yaml](file:///Users/phucdinh/data/Projects/vibecoding/openclaw-skills/facebook-group-monitor-pattern/scripts/config.yaml)
+
+```yaml
+monitors:
+  - name: "VN30 Stock Tracker"
+    groups:
+      - url: "https://www.facebook.com/groups/123456789"
+        schedule: "0 8 * * *"
+      - url: "https://www.facebook.com/groups/987654321"
+        schedule: "0 8,14 * * *"
+    patterns:
+      - "FPT"
+      - "VNM"
+      - "VCB"
+      - "HPG"
+      - "VHM"
+    match_mode: "word"       # exact word boundary: \bPATTERN\b
+    collection: "fb_stock_mentions"
+
+  - name: "Job Hunter"
+    groups:
+      - url: "https://www.facebook.com/groups/111222333"
+        schedule: "0 9 * * *"
+    patterns:
+      - "DevOPS remote"
+      - "frontend developer"
+    match_mode: "contains"   # word-split: all words present (order-independent)
+    collection: "fb_job_posts"
+
+settings:
+  browser_data_dir: ".browser-data"             # separate session (local to this skill)
+  cooldown_between_groups_ms: [120000, 300000]  # 2-5 min random
+  delay_between_actions_ms: [3000, 8000]        # 3-8 sec random
+  max_scroll_rounds: 8
+  post_limit_per_group: 30
+  yesterday_only: true
+```
+
+#### [NEW] [.env.example](file:///Users/phucdinh/data/Projects/vibecoding/openclaw-skills/facebook-group-monitor-pattern/scripts/.env.example)
+
+```
+MONGODB_URI=mongodb://user:pass@localhost:27017/openclaw
+```
+
+---
+
+### Core Modules
+
+#### [NEW] [types.ts](file:///Users/phucdinh/data/Projects/vibecoding/openclaw-skills/facebook-group-monitor-pattern/scripts/src/config/types.ts)
+
+TypeScript interfaces for the entire config and data model:
+- `MonitorConfig`, `GroupConfig`, `Settings`
+- `ScrapedPost`, `MatchedPost`
+- `MatchMode: "word" | "contains" | "regex"`
+
+#### [NEW] [loader.ts](file:///Users/phucdinh/data/Projects/vibecoding/openclaw-skills/facebook-group-monitor-pattern/scripts/src/config/loader.ts)
+
+- Parse `config.yaml` using `js-yaml`
+- Validate required fields
+- Resolve relative paths (browser data dir)
+
+#### [NEW] [pattern-matcher.ts](file:///Users/phucdinh/data/Projects/vibecoding/openclaw-skills/facebook-group-monitor-pattern/scripts/src/matcher/pattern-matcher.ts)
+
+Three match modes:
+- **`word`**: Exact word boundary `\bPATTERN\b` (for stock tickers like FPT, VNM)
+- **`contains`**: Split pattern into words, check ALL exist in text (case-insensitive). `"DevOPS remote"` → checks both `devops` AND `remote` are in text
+- **`regex`**: User-provided regex evaluated directly
+
+Returns `{ matched: boolean, matchedPatterns: string[] }`.
+
+#### [NEW] [browser.ts](file:///Users/phucdinh/data/Projects/vibecoding/openclaw-skills/facebook-group-monitor-pattern/scripts/src/crawler/browser.ts)
+
+Playwright stealth browser setup:
+- Same `user_agent`, `BROWSER_ARGS`, stealth plugin as Python version
+- **Separate** persistent browser data at `scripts/.browser-data/` (requires its own login)
+- Uses `playwright-extra` + `puppeteer-extra-plugin-stealth` for Node.js stealth
+
+#### [NEW] [scraper.ts](file:///Users/phucdinh/data/Projects/vibecoding/openclaw-skills/facebook-group-monitor-pattern/scripts/src/crawler/scraper.ts)
+
+Port of the Python scraper to TypeScript:
+- Navigate to group → scroll with random delays → extract posts via JS `evaluate`
+- Extract: `author`, [text](file:///Users/phucdinh/data/Projects/vibecoding/openclaw-skills/facebook-group-monitor/scripts/fb-group-monitor.py#226-248), `url`, `images`, `total_comment`, `total_liked`, `total_shared`
+- Post URL extraction uses same 4-pass strategy as existing Python skill
+- **No screenshots** (per requirement)
+- **Engagement metrics**: extract numbers from visible text like `"12 comments"` → `12`, `"5 likes"` → `5`. Returns `null` if text not found
+
+#### [NEW] [rate-limiter.ts](file:///Users/phucdinh/data/Projects/vibecoding/openclaw-skills/facebook-group-monitor-pattern/scripts/src/crawler/rate-limiter.ts)
+
+Anti-detection strategy for ~10 groups:
+- Random delay between page actions: 3-8 seconds
+- Cooldown between groups: 2-5 minutes (randomized)
+- Random scroll speed variation
+- Human-like mouse movement simulation (optional)
+- Max groups per session: configurable (default 5), then restart browser context
+
+#### [NEW] [date-parser.ts](file:///Users/phucdinh/data/Projects/vibecoding/openclaw-skills/facebook-group-monitor-pattern/scripts/src/crawler/date-parser.ts)
+
+Parse relative time text (Option A):
+- Vietnamese: `"Hôm qua"`, `"2 giờ"`, `"1 ngày"`, `"3 phút"`
+- English: `"Yesterday"`, `"2h"`, `"1d"`, `"3m"`
+- Returns estimated `Date` object
+- Function `isYesterday(text: string): boolean` for filtering
+
+#### [NEW] [models.ts](file:///Users/phucdinh/data/Projects/vibecoding/openclaw-skills/facebook-group-monitor-pattern/scripts/src/storage/models.ts)
+
+Mongoose schemas:
+```typescript
+// MatchedPost schema
+{
+  monitor_name: String,       // "VN30 Stock Tracker"
+  group_url: String,
+  group_name: String,
+  post_url: String,           // unique index
+  author: String,
+  text: String,
+  matched_patterns: [String], // ["FPT", "VCB"]
+  total_comment: Number | null,
+  total_liked: Number | null,
+  total_shared: Number | null,
+  post_date: String,          // "2026-03-15" (estimated from relative time)
+  scraped_at: Date,
+  images: Number
+}
+```
+
+#### [NEW] [dedup.ts](file:///Users/phucdinh/data/Projects/vibecoding/openclaw-skills/facebook-group-monitor-pattern/scripts/src/storage/dedup.ts)
+
+See [Dedup Daily Auto-Clean](#dedup-daily-auto-clean--how-it-works) section above for full explanation.
+
+#### [NEW] [connection.ts](file:///Users/phucdinh/data/Projects/vibecoding/openclaw-skills/facebook-group-monitor-pattern/scripts/src/storage/connection.ts)
+
+- Load `MONGODB_URI` from `.env` via `dotenv`
+- Mongoose connect with retry logic
+- Graceful disconnect on process exit
+
+#### [NEW] [index.ts](file:///Users/phucdinh/data/Projects/vibecoding/openclaw-skills/facebook-group-monitor-pattern/scripts/src/index.ts)
+
+CLI entry point with commands:
+- `scrape <monitor_name>` — run a specific monitor
+- `scrape-all` — run all monitors sequentially with cooldowns
+- `list` — list all configured monitors
+- [status](file:///Users/phucdinh/data/Projects/vibecoding/openclaw-skills/facebook-group-monitor/scripts/fb-group-monitor.py#362-390) — check browser session + MongoDB connection
+- `clean-dedup` — manually clean dedup tracking
+
+Output: JSON to stdout (same format as existing Python skill, plus `matched_patterns`).
+
+#### [NEW] [fb-monitor-pattern.sh](file:///Users/phucdinh/data/Projects/vibecoding/openclaw-skills/facebook-group-monitor-pattern/scripts/fb-monitor-pattern.sh)
+
+Shell wrapper that:
+1. Checks for Node.js
+2. Runs `npx tsx src/index.ts` (using `tsx` for TypeScript execution, no build step)
+3. Passes all arguments through
+
+---
+
+### Skill Documentation
+
+#### [NEW] [SKILL.md](file:///Users/phucdinh/data/Projects/vibecoding/openclaw-skills/facebook-group-monitor-pattern/SKILL.md)
+
+OpenClaw skill definition with:
+- Description, triggers, usage examples
+- Config file format documentation
+- CLI commands
+- Output JSON schema
+- Agent workflow (scrape → match → save)
+
+#### [NEW] [SETUP.md](file:///Users/phucdinh/data/Projects/vibecoding/openclaw-skills/facebook-group-monitor-pattern/references/SETUP.md)
+
+- Prerequisites (Node.js 20+)
+- Installation (`npm install`, `npx playwright install chromium`)
+- **First-time login** (separate session — same login/cookie-import flow as Python skill)
+- Config guide (YAML format, `.env`)
+- OpenClaw cron setup examples
+
+---
+
+## Verification Plan
+
+### Automated Tests
+
+Tests use `vitest` (fast, TypeScript-native, ESM-friendly).
+
+**1. Pattern Matcher Tests:**
+```bash
+cd facebook-group-monitor-pattern/scripts && npx vitest run src/matcher/__tests__/pattern-matcher.test.ts
+```
+- `word` mode: `"FPT"` matches `"FPT tăng 5%"` ✅, doesn't match `"FPTX"` ❌
+- `contains` mode: `"DevOPS remote"` matches `"Remote: need Senior DevOPS Engineer"` ✅
+- `contains` mode: `"DevOPS remote"` doesn't match `"DevOPS Engineer (onsite)"` ❌
+- `regex` mode: custom regex patterns
+
+**2. Date Parser Tests:**
+```bash
+cd facebook-group-monitor-pattern/scripts && npx vitest run src/crawler/__tests__/date-parser.test.ts
+```
+- Parse `"Hôm qua lúc 14:30"` → yesterday
+- Parse `"2 giờ"` → 2 hours ago
+- Parse `"1d"` → 1 day ago
+- `isYesterday()` correctly identifies yesterday vs today vs older
+
+**3. Dedup Engine Tests:**
+```bash
+cd facebook-group-monitor-pattern/scripts && npx vitest run src/storage/__tests__/dedup.test.ts
+```
+- Mark post as checked → second check returns true
+- Daily clean removes old entries
+- (Uses mongodb-memory-server for isolated testing)
+
+**All tests at once:**
+```bash
+cd facebook-group-monitor-pattern/scripts && npx vitest run
+```
+
+### Manual Verification
+
+> [!NOTE]
+> Full E2E testing requires an active Facebook login session and real Facebook groups.
+
+**Steps for user to manually test:**
+1. Login to Facebook via `./fb-monitor-pattern.sh login` or `login-cookies` (separate session)
+2. Configure a test monitor in `config.yaml` with a real group URL
+3. Run: `./fb-monitor-pattern.sh scrape "VN30 Stock Tracker"`
+4. Verify JSON output shows matched posts
+5. Check MongoDB collection for saved entries
+6. Run again (same day) → verify no duplicate entries
+7. Manually run `clean-dedup` → run again → verify posts are re-processed

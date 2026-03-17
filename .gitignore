@@ -3,6 +3,7 @@
 .seen-posts.json
 screenshots/
 temp-screenshots/
+cookies.json
 
 # OS
 .DS_Store
@@ -18,6 +19,10 @@ venv/
 
 # Node
 node_modules/
+dist/
+
+# Env secrets
+.env
 
 # IDE
 .vscode/
@@ -31,4 +36,3 @@ _meta.json
 *.skill
 .agent/
 facebook-group-monitor/scripts/.venv/*
-facebook-group-monitor/scripts/cookies.json
