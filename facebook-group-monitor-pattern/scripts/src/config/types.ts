@@ -14,6 +14,7 @@ export interface MonitorConfig {
 }
 
 export interface Settings {
+    headless: boolean;
     browser_data_dir: string;
     cooldown_between_groups_ms: [number, number];
     delay_between_actions_ms: [number, number];

@@ -64,6 +64,30 @@ export function parseRelativeTime(text: string, now?: Date): Date | null {
         }
     }
 
+    // Vietnamese full date: "17 tháng 3, 2026" or "17 tháng 3"
+    const vnDateMatch = text.match(/(\d{1,2})\s*tháng\s*(\d{1,2})(?:\s*,?\s*(\d{4}))?/i);
+    if (vnDateMatch) {
+        const day = parseInt(vnDateMatch[1], 10);
+        const month = parseInt(vnDateMatch[2], 10) - 1;
+        const year = vnDateMatch[3] ? parseInt(vnDateMatch[3], 10) : reference.getFullYear();
+        return new Date(year, month, day);
+    }
+
+    // English full date: "March 17, 2026" or "Mar 17"
+    const MONTHS: Record<string, number> = {
+        jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+        jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+        january: 0, february: 1, march: 2, april: 3, june: 5,
+        july: 6, august: 7, september: 8, october: 9, november: 10, december: 11,
+    };
+    const enDateMatch = lower.match(/([a-z]+)\s+(\d{1,2})(?:\s*,?\s*(\d{4}))?/);
+    if (enDateMatch && MONTHS[enDateMatch[1]] !== undefined) {
+        const month = MONTHS[enDateMatch[1]];
+        const day = parseInt(enDateMatch[2], 10);
+        const year = enDateMatch[3] ? parseInt(enDateMatch[3], 10) : reference.getFullYear();
+        return new Date(year, month, day);
+    }
+
     return null;
 }
 

@@ -8,6 +8,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCRIPTS_DIR = resolve(__dirname, '../..');
 
 const DEFAULT_SETTINGS: Settings = {
+    headless: true,
     browser_data_dir: '.browser-data',
     cooldown_between_groups_ms: [120_000, 300_000],
     delay_between_actions_ms: [3_000, 8_000],
@@ -81,6 +82,7 @@ function mergeSettings(raw: Partial<Settings> | undefined): Settings {
     if (!raw) return { ...DEFAULT_SETTINGS };
 
     return {
+        headless: raw.headless ?? DEFAULT_SETTINGS.headless,
         browser_data_dir: raw.browser_data_dir ?? DEFAULT_SETTINGS.browser_data_dir,
         cooldown_between_groups_ms: raw.cooldown_between_groups_ms ?? DEFAULT_SETTINGS.cooldown_between_groups_ms,
         delay_between_actions_ms: raw.delay_between_actions_ms ?? DEFAULT_SETTINGS.delay_between_actions_ms,

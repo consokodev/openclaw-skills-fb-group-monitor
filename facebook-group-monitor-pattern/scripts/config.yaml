@@ -11,7 +11,8 @@ monitors:
     patterns:
       - "SSI"
       - "DGC"
-    match_mode: "word"              # exact word boundary: \bPATTERN\b
+      - "DCM"
+    match_mode: "contains"              # exact word boundary: \bPATTERN\b
     collection: "fb_stock_mentions"
 
   # - name: "Job Hunter"
@@ -26,9 +27,10 @@ monitors:
   #   collection: "fb_job_posts"
 
 settings:
+  headless: false                                    # true=headless, false=show browser window
   browser_data_dir: ".browser-data"
   cooldown_between_groups_ms: [120000, 300000]  # 2-5 min random
   delay_between_actions_ms: [3000, 8000]        # 3-8 sec random
-  max_scroll_rounds: 8
-  post_limit_per_group: 30
+  max_scroll_rounds: 30
+  post_limit_per_group: 50
   yesterday_only: false

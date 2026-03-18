@@ -29,10 +29,11 @@ export async function createBrowserContext(
         headless,
         viewport: { width: 1280, height: 900 },
         userAgent: USER_AGENT,
-        args: BROWSER_ARGS,
+        args: [...BROWSER_ARGS, '--deny-permission-prompts'],
         ignoreDefaultArgs: ['--enable-automation'],
         locale: 'en-US',
         timezoneId: 'America/New_York',
+        permissions: [],  // deny all permission prompts (notifications, geolocation, etc.)
     });
 
     // Patch navigator.webdriver to avoid detection
@@ -42,6 +43,9 @@ export async function createBrowserContext(
 
     const pages = context.pages();
     const page = pages[0] ?? (await context.newPage());
+
+    // Auto-dismiss any browser dialogs (alert, confirm, prompt, beforeunload)
+    page.on('dialog', (dialog) => dialog.dismiss().catch(() => { }));
 
     return { context, page };
 }

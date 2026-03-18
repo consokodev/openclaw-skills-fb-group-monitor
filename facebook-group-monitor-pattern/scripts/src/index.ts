@@ -103,7 +103,7 @@ async function cmdStatus() {
     // Check browser session
     let browserOk = false;
     try {
-        const { context, page } = await createBrowserContext(config.settings, true);
+        const { context, page } = await createBrowserContext(config.settings, config.settings.headless);
         browserOk = await checkLoginStatus(page);
         await context.close();
     } catch { /* handled */ }
@@ -246,7 +246,7 @@ async function cmdLoginCookies(args: string[]) {
 
     // Import cookies into persistent browser context
     const config = loadConfig();
-    const { context, page } = await createBrowserContext(config.settings, true);
+    const { context, page } = await createBrowserContext(config.settings, config.settings.headless);
 
     await context.addCookies(pwCookies as unknown as Parameters<typeof context.addCookies>[0]);
 
@@ -307,7 +307,7 @@ async function cmdScrape(args: string[]) {
     await connectDB();
     await cleanOldEntries();
 
-    const { context, page } = await createBrowserContext(config.settings, true);
+    const { context, page } = await createBrowserContext(config.settings, config.settings.headless);
 
     try {
         const allMatched: MatchedPost[] = [];
@@ -322,20 +322,34 @@ async function cmdScrape(args: string[]) {
             try {
                 const { posts, groupName } = await scrapeGroupPosts(page, group.url, config.settings);
 
+                log(`📊 Scraped ${posts.length} posts from group`);
+                let skippedYesterday = 0;
+                let skippedDedup = 0;
+                let skippedNoMatch = 0;
+
                 for (const post of posts) {
                     // Filter: yesterday only (if enabled)
                     if (config.settings.yesterday_only && post.relative_time) {
-                        if (!isYesterday(post.relative_time)) continue;
+                        if (!isYesterday(post.relative_time)) {
+                            skippedYesterday++;
+                            continue;
+                        }
                     }
 
                     // Dedup check
                     if (post.url && await isChecked(post.url)) {
+                        skippedDedup++;
                         continue;
                     }
 
                     // Pattern matching
                     const result = matchPatterns(post.text, monitor!.patterns, monitor!.match_mode);
-                    if (!result.matched) continue;
+                    if (!result.matched) {
+                        skippedNoMatch++;
+                        log(`  ❌ No match — preview: "${post.text.substring(0, 120)}..."`);
+                        continue;
+                    }
+                    log(`  ✅ Matched [${result.matchedPatterns.join(', ')}] — preview: "${post.text.substring(0, 120)}..."`);
 
                     const matched: MatchedPost = {
                         monitor_name: monitor!.name,
@@ -356,9 +370,11 @@ async function cmdScrape(args: string[]) {
                     // Save to MongoDB
                     try {
                         const Model = getMatchedPostModel(monitor!.collection);
+                        // When post_url is empty, generate a unique key from text content
+                        const postKey = matched.post_url || `text:${matched.text.substring(0, 200)}:${matched.author}`;
                         await Model.updateOne(
-                            { post_url: matched.post_url, monitor_name: matched.monitor_name },
-                            { $set: matched },
+                            { post_url: postKey, monitor_name: matched.monitor_name },
+                            { $set: { ...matched, post_url: postKey } },
                             { upsert: true }
                         );
                         allMatched.push(matched);
@@ -371,6 +387,8 @@ async function cmdScrape(args: string[]) {
                         await markChecked(post.url, monitor!.name);
                     }
                 }
+
+                log(`📋 Summary: ${posts.length} scraped → ${skippedYesterday} skipped(date) / ${skippedDedup} skipped(dedup) / ${skippedNoMatch} skipped(no-match) / ${allMatched.length} matched`);
             } catch (groupErr) {
                 logError(`Failed to scrape group ${group.url}`, groupErr);
             }
@@ -404,7 +422,7 @@ async function cmdScrapeAll() {
     await connectDB();
     await cleanOldEntries();
 
-    const { context, page } = await createBrowserContext(config.settings, true);
+    const { context, page } = await createBrowserContext(config.settings, config.settings.headless);
 
     const results: Array<{ monitor: string; matched: number; error?: string }> = [];
 
@@ -454,9 +472,10 @@ async function cmdScrapeAll() {
 
                         try {
                             const Model = getMatchedPostModel(monitor.collection);
+                            const postKey = matchedPost.post_url || `text:${matchedPost.text.substring(0, 200)}:${matchedPost.author}`;
                             await Model.updateOne(
-                                { post_url: matchedPost.post_url, monitor_name: matchedPost.monitor_name },
-                                { $set: matchedPost },
+                                { post_url: postKey, monitor_name: matchedPost.monitor_name },
+                                { $set: { ...matchedPost, post_url: postKey } },
                                 { upsert: true }
                             );
                             matched++;
