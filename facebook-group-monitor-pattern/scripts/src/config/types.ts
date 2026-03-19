@@ -67,3 +67,23 @@ export interface ScrapeResult {
     message?: string;
     error?: string;
 }
+
+export interface QueryResult {
+    success: boolean;
+    action: 'query';
+    total: number;
+    filters: {
+        pattern?: string;
+        search?: string;
+        days?: number;
+        from?: string;
+        to?: string;
+        monitor?: string;
+        collection?: string;
+    };
+    posts: MatchedPost[];
+    message?: string;
+    error?: string;
+}
+
+export type CLIResult = ScrapeResult | QueryResult;

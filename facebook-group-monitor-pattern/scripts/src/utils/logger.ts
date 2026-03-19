@@ -1,9 +1,9 @@
-import type { ScrapeResult } from '../config/types.js';
+import type { CLIResult } from '../config/types.js';
 
 /**
  * Print JSON result to stdout (for agent consumption) and exit.
  */
-export function resultJson(data: ScrapeResult): never {
+export function resultJson(data: CLIResult): never {
     console.log(JSON.stringify(data, null, 2));
     process.exit(data.success ? 0 : 1);
 }

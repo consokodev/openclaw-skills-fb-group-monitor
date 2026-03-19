@@ -5,10 +5,12 @@ description: >-
   user-defined patterns (stock tickers, job titles, keywords — anything).
   Uses Playwright stealth browser, saves matched posts to MongoDB, deduplicates
   across reruns, and auto-cleans daily. Supports three match modes: exact word
-  boundary, word-split contains, and regex.
+  boundary, word-split contains, and regex. Includes a query command to search
+  saved posts by pattern, keyword, or time range.
   Triggers: 'monitor Facebook groups for patterns', 'scrape FB group for stocks',
   'check group posts matching keywords', 'find job posts in Facebook groups',
-  'Facebook group pattern monitoring'.
+  'Facebook group pattern monitoring', 'query saved posts', 'search Facebook posts',
+  'latest posts about stock X', 'find recent posts matching keyword'.
 metadata:
   openclaw:
     category: "social"
@@ -130,6 +132,40 @@ Output:
 {"success": true, "action": "login-cookies", "message": "Imported 15 cookies. Session active — logged into Facebook."}
 ```
 
+### 8. Query saved posts
+```bash
+scripts/fb-monitor-pattern.sh query --pattern "SSI" --limit 5
+```
+
+Options:
+| Flag | Description | Example |
+|------|-------------|--------|
+| `--pattern <text>` | Filter by matched pattern | `--pattern "SSI"` |
+| `--search <text>` | Full-text search in post content (case-insensitive) | `--search "cổ phiếu tăng"` |
+| `--days <N>` | Posts from last N days | `--days 7` |
+| `--from <date>` | Start date (YYYY-MM-DD) | `--from 2026-03-01` |
+| `--to <date>` | End date (YYYY-MM-DD) | `--to 2026-03-15` |
+| `--limit <N>` | Max results (default: 10) | `--limit 5` |
+| `--monitor <name>` | Scope to a specific monitor's collection | `--monitor "VN30 Stock Tracker"` |
+| `--collection <name>` | Query a specific collection directly | `--collection "fb_stock_mentions"` |
+
+Combine flags:
+```bash
+scripts/fb-monitor-pattern.sh query --pattern "SSI" --search "tăng" --days 3 --limit 5
+```
+
+Output:
+```json
+{
+  "success": true,
+  "action": "query",
+  "total": 3,
+  "filters": { "pattern": "SSI", "days": 3 },
+  "posts": [ ... ],
+  "message": "Found 3 post(s) matching your query."
+}
+```
+
 ## Output JSON
 
 ```json
@@ -181,6 +217,48 @@ If `success == false`, report error briefly.
 🔗 [Post Link](https://facebook.com/groups/.../posts/...)
 ```
 
+## Agent Workflow — Answering Questions from Saved Data
+
+When the user asks about saved posts (e.g., "5 post mới nhất về SSI", "latest posts about FPT",
+"tìm bài về cổ phiếu trong 7 ngày qua"), translate the question into query flags:
+
+### Translation Rules
+
+| User intent | Flag |
+|---|---|
+| Specific stock/pattern name (e.g., "SSI", "FPT") | `--pattern "SSI"` |
+| Keyword in post text (e.g., "cổ phiếu tăng") | `--search "cổ phiếu tăng"` |
+| "N posts" or "top N" | `--limit N` |
+| "last N days" / "trong N ngày qua" | `--days N` |
+| "from date X" / "từ ngày X" | `--from YYYY-MM-DD` |
+| "until date Y" / "đến ngày Y" | `--to YYYY-MM-DD` |
+| Specific monitor name | `--monitor "VN30 Stock Tracker"` |
+
+### Example Translations
+
+- "5 post mới nhất về SSI" → `query --pattern "SSI" --limit 5`
+- "Bài viết về cổ phiếu trong 7 ngày qua" → `query --search "cổ phiếu" --days 7`
+- "FPT posts from last week" → `query --pattern "FPT" --days 7`
+- "All recent posts" → `query --limit 20`
+- "Tìm bài nói về tăng giá tuần qua" → `query --search "tăng giá" --days 7`
+
+### Step 1: Run query
+```bash
+scripts/fb-monitor-pattern.sh query --pattern "SSI" --limit 5
+```
+
+### Step 2: Parse JSON and present
+Read the `posts` array from the JSON output. Format each post for the user:
+```
+📌 *[SSI]* — 2026-03-15
+👤 Author: Nguyễn Văn A
+📝 SSI tăng 5% trong phiên sáng...
+💬 12 comments | 👍 5 likes | 🔄 3 shares
+🔗 [Post Link](https://facebook.com/groups/.../posts/...)
+```
+
+If `total == 0`, tell the user no matching posts were found.
+
 ## Important Notes
 
 - **Rate limiting**: Cooldown between groups (2-5 min), random delays between actions (3-8s)
@@ -189,3 +267,4 @@ If `success == false`, report error briefly.
 - **Separate session**: This skill has its own browser session (`.browser-data/`)
 - **Engagement metrics**: Extracted from visible text (e.g., "12 comments"), may be null
 - **UI changes**: Facebook updates DOM frequently — selectors may need updates
+- **Query collections**: The query command reads `config.yaml` to determine which MongoDB collections to search

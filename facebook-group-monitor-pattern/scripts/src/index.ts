@@ -10,10 +10,12 @@ import { isYesterday, getPostDateString, isOlderThanYesterday } from './crawler/
 import { groupCooldown } from './crawler/rate-limiter.js';
 import { connectDB, disconnectDB, getMatchedPostModel } from './storage/connection.js';
 import { cleanOldEntries, isChecked, markChecked, cleanAll } from './storage/dedup.js';
+import { queryPosts } from './storage/query.js';
+import type { QueryOptions } from './storage/query.js';
 import { resultJson, log, logError } from './utils/logger.js';
 import type { MatchedPost, ScrapeResult } from './config/types.js';
 
-const COMMANDS = ['scrape', 'scrape-all', 'list', 'status', 'clean-dedup', 'login', 'login-cookies', 'help'] as const;
+const COMMANDS = ['scrape', 'scrape-all', 'query', 'list', 'status', 'clean-dedup', 'login', 'login-cookies', 'help'] as const;
 type Command = (typeof COMMANDS)[number];
 
 async function main() {
@@ -27,6 +29,9 @@ async function main() {
             break;
         case 'scrape-all':
             await cmdScrapeAll();
+            break;
+        case 'query':
+            await cmdQuery(rest);
             break;
         case 'list':
             cmdList();
@@ -60,6 +65,7 @@ Usage:
 Commands:
   scrape <monitor_name>        Run a specific monitor by name
   scrape-all                   Run all monitors sequentially with cooldowns
+  query [options]              Query saved posts from MongoDB
   list                         List all configured monitors
   status                       Check browser session + MongoDB connection
   clean-dedup                  Clear all dedup tracking entries
@@ -67,9 +73,22 @@ Commands:
   login-cookies <cookie_file>  Import cookies from JSON file (Docker/headless)
   help                         Show this help
 
+Query options:
+  --pattern <text>     Filter by matched pattern (e.g. "SSI")
+  --search <text>      Full-text search in post content (case-insensitive)
+  --days <N>           Posts from last N days
+  --from <YYYY-MM-DD>  Start date filter
+  --to <YYYY-MM-DD>    End date filter
+  --limit <N>          Max results (default: 10)
+  --monitor <name>     Scope to a specific monitor's collection
+  --collection <name>  Query a specific collection directly
+
 Examples:
   fb-monitor-pattern.sh scrape "VN30 Stock Tracker"
   fb-monitor-pattern.sh scrape-all
+  fb-monitor-pattern.sh query --pattern "SSI" --limit 5
+  fb-monitor-pattern.sh query --search "cổ phiếu" --days 7
+  fb-monitor-pattern.sh query --monitor "VN30 Stock Tracker" --days 3
   fb-monitor-pattern.sh list
   fb-monitor-pattern.sh status
 `);
@@ -517,6 +536,91 @@ async function cmdScrapeAll() {
         resultJson({
             success: false,
             action: 'scrape-all',
+            error: error instanceof Error ? error.message : String(error),
+        });
+    }
+}
+
+function parseFlag(args: string[], flag: string): string | undefined {
+    const idx = args.indexOf(flag);
+    if (idx === -1 || idx + 1 >= args.length) return undefined;
+    return args[idx + 1];
+}
+
+async function cmdQuery(args: string[]) {
+    const config = loadConfig();
+
+    const options: QueryOptions = {
+        pattern: parseFlag(args, '--pattern'),
+        search: parseFlag(args, '--search'),
+        monitor: parseFlag(args, '--monitor'),
+        collection: parseFlag(args, '--collection'),
+    };
+
+    const daysStr = parseFlag(args, '--days');
+    if (daysStr) options.days = parseInt(daysStr, 10);
+
+    const limitStr = parseFlag(args, '--limit');
+    if (limitStr) options.limit = parseInt(limitStr, 10);
+
+    options.from = parseFlag(args, '--from');
+    options.to = parseFlag(args, '--to');
+
+    // Resolve collection names from config
+    let collectionNames: string[];
+
+    if (options.collection) {
+        collectionNames = [options.collection];
+    } else if (options.monitor) {
+        const monitor = findMonitor(config, options.monitor);
+        if (!monitor) {
+            resultJson({
+                success: false,
+                action: 'query',
+                total: 0,
+                filters: options,
+                posts: [],
+                error: `Monitor "${options.monitor}" not found. Available: ${config.monitors.map((m) => m.name).join(', ')}`,
+            });
+        }
+        collectionNames = [monitor!.collection];
+    } else {
+        // Query all unique collections from config
+        collectionNames = [...new Set(config.monitors.map((m) => m.collection))];
+    }
+
+    await connectDB();
+
+    try {
+        const posts = await queryPosts(collectionNames, options);
+        await disconnectDB();
+
+        resultJson({
+            success: true,
+            action: 'query',
+            total: posts.length,
+            filters: {
+                pattern: options.pattern,
+                search: options.search,
+                days: options.days,
+                from: options.from,
+                to: options.to,
+                monitor: options.monitor,
+                collection: options.collection,
+            },
+            posts,
+            message: posts.length > 0
+                ? `Found ${posts.length} post(s) matching your query.`
+                : 'No posts found matching your query.',
+        });
+    } catch (error) {
+        await disconnectDB();
+        resultJson({
+            success: false,
+            action: 'query',
+            total: 0,
+            filters: options,
+            posts: [],
             error: error instanceof Error ? error.message : String(error),
         });
     }
